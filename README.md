@@ -7,8 +7,8 @@
 # High level design
 
 There are two applications:
-* The bot which will play "Ticket to Ride", [`ticket-to-ride-bot`](./ticket-to-ride-bot).
-* The tool for configuration, [`configurator`](./configurator). This tool helps 
+* The bot which will play "Ticket to Ride", [`bot.py`](./bot.py).
+* The tool for configuration, [`configurator.py`](./configurator.py). This tool helps 
 input game data like maps, cities and their routes, screen regions, available tickets etc.
 
 
@@ -23,13 +23,13 @@ input game data like maps, cities and their routes, screen regions, available ti
 ## Ticket to Ride bot
 
 ```bash
-python ticket-to-ride-bot/main.py
+python bot.py
 ```
 
 ## Configurator
 
 ```bash
-python configurator/main.py
+python configurator.py
 ```
 
 # License

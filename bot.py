@@ -10,6 +10,7 @@ import pymonctl
 import pywinctl
 
 import bot.window_interface_helpers as win
+from bot.window_interface_helpers import is_point_in_window
 from view_elements.scroll_list import ScrollList
 
 
@@ -114,32 +115,29 @@ class Bot(tk.Tk):
     def on_press(self, key):
         if key == keyboard.Key.f7:
             # Mark top left
-            self.top_left = win.global_to_window_space(self.target_window, win.GlobalPoint(*pymonctl.getMousePos()))
+            point = win.GlobalPoint(*pymonctl.getMousePos())
+            if is_point_in_window(self.target_window, point):
+                self.top_left = win.global_to_window_space(self.target_window, point)
+            else:
+                print(f'Point must be in window')
         elif key == keyboard.Key.f8:
             # Mark bottom right
-            self.bottom_right = win.global_to_window_space(self.target_window, win.GlobalPoint(*pymonctl.getMousePos()))
-            if (
-                    self.top_left.x < 0 or
-                    self.top_left.y < 0 or
-                    self.bottom_right.x > self.target_window.width or
-                    self.bottom_right.y > self.target_window.height
-            ):
-                print(f'Rectangle points must be in window')
+            point = win.GlobalPoint(*pymonctl.getMousePos())
+            if not is_point_in_window(self.target_window, point):
+                print(f'Point must be in window')
                 return
+            self.bottom_right = win.global_to_window_space(self.target_window, point)
             if self.bottom_right.x <= self.top_left.x or self.bottom_right.y <= self.top_left.y:
                 print(f'Rectangle points invalid')
                 return
             print(f'Top left: {self.top_left}, Bottom right: {self.bottom_right}')
             rect = win.Rectangle(self.top_left, self.bottom_right)
-            screenshot = win.screenshot_window(self.target_window)
-            region_img = screenshot.resize(
-                (rect.width, rect.height),
-                box=(self.top_left.x, self.top_left.y, self.bottom_right.x, self.bottom_right.y)
-            )
-            self.image_queue.put(region_img)
+            screenshot = win.screenshot_rect(rect)
+            self.image_queue.put(screenshot)
         elif key == keyboard.Key.f10:
-            # Mark top left
             point = win.global_to_window_space(self.target_window, win.GlobalPoint(*pymonctl.getMousePos()))
+            screenshot = win.screenshot_around_mouse()
+            self.image_queue.put(screenshot)
             print(f'{point}')
         elif key == keyboard.Key.esc:
             self.listener.stop()

@@ -28,6 +28,9 @@ class Point:
     def __repr__(self):
         return f'(x:{self.x}, y:{self.y})'
 
+    def xy_tuple(self) -> tuple:
+        return self.x, self.y
+
 
 class GlobalPoint(Point):
     pass
@@ -36,7 +39,10 @@ class GlobalPoint(Point):
 class WindowPoint(Point):
     def __init__(self, x, y, window):
         super().__init__(x, y)
-        self.window = window
+        self.window: pywinctl.Window = window
+
+    def global_point(self) -> GlobalPoint:
+        return GlobalPoint(self.x + self.window.left, self.y + self.window.top)
 
 
 class Rectangle:
@@ -109,6 +115,21 @@ def screenshot_window(window=None, name=None) -> Image:
     y = window.topleft.y
     width = window.width
     height = window.height
+
+    # Take a screenshot of the defined region
+    screenshot = pyautogui.screenshot(region=(x, y, width, height))
+    return screenshot
+
+
+def screenshot_rect(rect: Rectangle) -> Image:
+    # Define the region (left, top, width, height) for the screenshot
+    top_left = rect.top_left
+    if isinstance(top_left, WindowPoint):
+        top_left = top_left.global_point()
+    x = top_left.x
+    y = top_left.y
+    width = rect.width
+    height = rect.height
 
     # Take a screenshot of the defined region
     screenshot = pyautogui.screenshot(region=(x, y, width, height))

@@ -1,169 +1,159 @@
-from typing import Self
+import queue
+import tkinter as tk
+from threading import Thread
+from tkinter import ttk
 
-from matplotlib import pyplot
-import numpy as np
-from PIL.Image import Image
-import pyautogui
+import PIL.Image
+import PIL.ImageTk
 from pynput import keyboard
 import pymonctl
 import pywinctl
 
-
-class Color:
-    def __init__(self, red: float, green: float, blue: float):
-        self.red = red
-        self.green = green
-        self.blue = blue
-
-    def distance(self, other: Self) -> float:
-        return abs(self.red - other.red) + abs(self.green - other.green) + abs(self.blue - other.blue)
+import bot.window_interface_helpers as win
+from view_elements.scroll_list import ScrollList
 
 
-class Point:
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
-
-    def __repr__(self):
-        return f'(x:{self.x}, y:{self.y})'
+TARGET_WINDOW: pywinctl.Window|None = None
 
 
-class GlobalPoint(Point):
-    pass
+class WindowChooser(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Ticket To Ride bot")
+        self.geometry("400x400")
+
+        ttk.Label(text="Choose your window", padding=10).pack(side=tk.TOP, fill=tk.X)
+        tk.Button(text="Select", padx=10, pady=10, background='lightblue', command=self.set_target_window).pack(side=tk.BOTTOM, fill=tk.X)
+        chooser_frame = tk.Frame(self)
+        self.window_options = win.get_windows()
+        self.chooser = ScrollList(chooser_frame)
+        chooser_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        for window in self.window_options:
+            self.chooser.list_view.insert('end', window.title)
+
+    def set_target_window(self):
+        global TARGET_WINDOW
+        selected = self.chooser.list_view.curselection()
+        TARGET_WINDOW = self.window_options[selected[0]]
+        self.destroy()
 
 
-class WindowPoint(Point):
-    def __init__(self, x, y, window):
-        super().__init__(x, y)
-        self.window = window
+class Bot(tk.Tk):
+    def __init__(self, window: pywinctl.Window):
+        super().__init__()
+        self.title("Ticket To Ride bot")
+        self.geometry("800x800")
+
+        self.top_left = win.GlobalPoint(0, 0)
+        self.bottom_right = win.GlobalPoint(0, 0)
+        self.listener = keyboard.Listener(on_press=self.on_press)
+        self.target_window = window
+
+        self.listener.start()
+        self.listener.wait()
+
+        print('Press F7 to mark top left, F8 to mark bottom right')
+        print('Press ESC to exit')
+        self.bind_all("<Escape>", self.escape_key)
+
+        self.image_queue: queue.Queue[PIL.Image.Image] = queue.Queue()
+        self.image_frame = tk.Frame(self, bg='lightblue', padx=10, pady=10)
+        self.image_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        self.key_bindings_frame = ttk.LabelFrame(text='Key bindings', height=4)
+        self.key_bindings_frame.pack(side=tk.BOTTOM, fill=tk.X, expand=False)
+        ttk.Label(self.key_bindings_frame, text='Exit: ESC').grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(self.key_bindings_frame, text='Mark rectangle top-left: F7').grid(row=1, column=0, sticky=tk.W)
+        ttk.Label(self.key_bindings_frame, text='Mark rectangle bottom-right and print rectangle: F8').grid(row=2, column=0, sticky=tk.W)
+        ttk.Label(self.key_bindings_frame, text='Mark point and print point: F10').grid(row=3, column=0, sticky=tk.W)
+        self.after(200, self.poll_for_new_image_to_render)
+
+    def poll_for_new_image_to_render(self):
+        try:
+            item: PIL.Image.Image = self.image_queue.get_nowait()
+            size = self.resize_image_for_constraints(
+                item,
+                win.Size(self.image_frame.winfo_width(), self.image_frame.winfo_height() - 20), # -20 for 10 padding
+            )
+            for widget in self.image_frame.winfo_children():
+                widget.destroy()
+            resized = item.resize((size.width, size.height))
+            imtk = PIL.ImageTk.PhotoImage(resized)
+            img = tk.Label(self.image_frame, image=imtk, borderwidth=0)
+            img.image = imtk
+            img.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        except queue.Empty:
+            pass
+        finally:
+            self.after(200, self.poll_for_new_image_to_render)
+
+    @staticmethod
+    def resize_image_for_constraints(image: PIL.Image.Image, constraints: win.Size) -> win.Size:
+        # Find the constraining dimension. Ex: a vertical video playing on a wide screen. The video has a low aspect
+        # ratio than the screen. As a result, the Y dimension is constraining. Otherwise, X constrains.
+        image_aspect_ratio = image.width / image.height
+        constraints_aspect_ratio = constraints.width / constraints.height
+        if image_aspect_ratio > constraints_aspect_ratio:
+            # Image is "wider" than the screen, we need to fit the width in the screen and make the height match.
+            width = constraints.width
+            height = width / image_aspect_ratio
+            return win.Size(width, int(height))
+        else:
+            # Image is "taller" than the screen, we need to fit the height in the screen and make the width match.
+            height = constraints.height
+            width = height * image_aspect_ratio
+            return win.Size(int(width), height)
 
 
-def global_to_window_space(window: pywinctl.Window, point: GlobalPoint) -> WindowPoint:
-    return WindowPoint(point.x - window.left, point.y - window.top, window)
+    def escape_key(self, _):
+        self.quit()
 
+    def quit(self):
+        self.destroy()
 
-def window_to_global_space(window: pywinctl.Window, point: WindowPoint) -> GlobalPoint:
-    return GlobalPoint(point.x + window.left, point.y + window.top)
-
-
-def is_point_in_window(window: pywinctl.Window, point: GlobalPoint) -> bool:
-    return window.left <= point.x <= window.right and window.top <= point.y <= window.bottom
-
-
-def print_windows():
-    for window in pywinctl.getAllWindows():
-        print(f"Window: [{window.title}] {window.size}")
-
-
-def get_window_or_exit(name) -> pywinctl.Window:
-    window = pywinctl.getWindowsWithTitle(name, condition=pywinctl.Re.CONTAINS, flags=pywinctl.Re.IGNORECASE)
-    if window:
-        window = window[0]
-    else:
-        print("No window found")
-        exit(1)
-    print(f"Target Window: [{window.title}] ({window.topleft}) {window.size}")
-    return window
-
-
-def screenshot_around_mouse() -> Image:
-    mouse = pymonctl.getMousePos()
-    rect_size = 20
-    return pyautogui.screenshot(region=(mouse.x - rect_size // 2, mouse.y - rect_size // 2, rect_size, rect_size))
-
-
-def screenshot_window(window=None, name=None) -> Image:
-    if window is None and name:
-        window = get_window_or_exit(name)
-    # Define the region (left, top, width, height) for the screenshot
-    x = window.topleft.x
-    y = window.topleft.y
-    width = window.width
-    height = window.height
-
-    # Take a screenshot of the defined region
-    screenshot = pyautogui.screenshot(region=(x, y, width, height))
-    return screenshot
-
-
-def display_color(color: Color, ax: pyplot.Axes):
-    # Create a plot of that color
-
-    # Display the color
-    ax.axis('off')
-    ax.set_title(f'average color')
-    ax.imshow([[[int(color.red), int(color.green), int(color.blue)]]], extent=[0, 1, 0, 1], vmin=0, vmax=255)
-
-
-def average_color(nparray) -> Color:
-    average_rgb = nparray.mean(axis=(0, 1))
-    return Color(average_rgb[0], average_rgb[1], average_rgb[2])
-
-
-def average_color_and_display(nparray):
-    fig, (ax1, ax2) = pyplot.subplots(nrows=1, ncols=2)
-    ax1.imshow(nparray)
-    display_color(average_color(nparray), ax2)
-    fig.show()
-    pass
-
-
-def subrect_of_img_size(img: np.ndarray, x: int, y: int, width: int, height: int) -> np.ndarray:
-    return subrect_of_img(img, x, y, x+width, y+height)
-
-
-def subrect_of_img(img: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> np.ndarray:
-    return img[y1:y2, x1:x2]
-
-
-TOP_LEFT = GlobalPoint(0, 0)
-BOTTOM_RIGHT = GlobalPoint(0, 0)
-LISTENER: keyboard.Listener = None
-TARGET_WINDOW: pywinctl.Window = None
-
-
-def on_press(key):
-    global TOP_LEFT, BOTTOM_RIGHT, LISTENER
-    if key == keyboard.Key.f7:
-        # Mark top left
-        x, y = pymonctl.getMousePos()
-        TOP_LEFT = GlobalPoint(x, y)
-    elif key == keyboard.Key.f8:
-        # Mark top left
-        x, y = pymonctl.getMousePos()
-        BOTTOM_RIGHT = GlobalPoint(x, y)
-        top_left = global_to_window_space(TARGET_WINDOW, TOP_LEFT)
-        bottom_right = global_to_window_space(TARGET_WINDOW, BOTTOM_RIGHT)
-        print(f'Top left: {top_left}, Bottom right: {bottom_right}')
-    elif key == keyboard.Key.esc:
-        LISTENER.stop()
+    def on_press(self, key):
+        if key == keyboard.Key.f7:
+            # Mark top left
+            self.top_left = win.global_to_window_space(self.target_window, win.GlobalPoint(*pymonctl.getMousePos()))
+        elif key == keyboard.Key.f8:
+            # Mark bottom right
+            self.bottom_right = win.global_to_window_space(self.target_window, win.GlobalPoint(*pymonctl.getMousePos()))
+            if (
+                    self.top_left.x < 0 or
+                    self.top_left.y < 0 or
+                    self.bottom_right.x > self.target_window.width or
+                    self.bottom_right.y > self.target_window.height
+            ):
+                print(f'Rectangle points must be in window')
+                return
+            if self.bottom_right.x <= self.top_left.x or self.bottom_right.y <= self.top_left.y:
+                print(f'Rectangle points invalid')
+                return
+            print(f'Top left: {self.top_left}, Bottom right: {self.bottom_right}')
+            rect = win.Rectangle(self.top_left, self.bottom_right)
+            screenshot = win.screenshot_window(self.target_window)
+            region_img = screenshot.resize(
+                (rect.width, rect.height),
+                box=(self.top_left.x, self.top_left.y, self.bottom_right.x, self.bottom_right.y)
+            )
+            self.image_queue.put(region_img)
+        elif key == keyboard.Key.f10:
+            # Mark top left
+            point = win.global_to_window_space(self.target_window, win.GlobalPoint(*pymonctl.getMousePos()))
+            print(f'{point}')
+        elif key == keyboard.Key.esc:
+            self.listener.stop()
+            self.destroy()
 
 
 def main():
-    global LISTENER, TARGET_WINDOW
+    win.print_windows()
+    window_chooser = WindowChooser()
+    window_chooser.mainloop()
+    app = Bot(TARGET_WINDOW)
+    app.mainloop()
 
-    print_windows()
-
-    mouse_area = screenshot_around_mouse()
-    mouse_array = np.array(mouse_area)
-    average_color_and_display(mouse_array)
-
-    TARGET_WINDOW = get_window_or_exit("TicketToRide")
-    screenshot = screenshot_window(window=TARGET_WINDOW)
-    window_array = np.array(screenshot)
-    average_color_and_display(window_array)
-
-    subimg = subrect_of_img(window_array, 606, 1190, 1258, 1329)
-    average_color_and_display(subimg)
-
-    LISTENER = keyboard.Listener(on_press=on_press)
-    LISTENER.start()
-    LISTENER.wait()
-    print('Press F7 to mark top left, F8 to mark bottom right')
-
-    pyplot.show()
-    print('Press ESC to exit')
-    LISTENER.join()
+    Thread(target=app.listener.stop).start()
 
 
 if __name__ == "__main__":
